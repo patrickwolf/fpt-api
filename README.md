@@ -3,7 +3,8 @@ A wrapper around Flow Production Tracking (formerly ShotGrid) [shotgun_api3](htt
 
 ## Why this wrapper?
 
-Unfortunately, the shotgun_api3 does not allow retrieval of query fields.
+Unfortunately, `shotgun_api3` does not allow retrieval of query fields, even though this can be useful in multiple
+scenarios (like building reports/charts, or many other use cases).
 It's also not thread safe.
 
 Even though you could have your custom logic to compute the query fields (which could be faster than this library),
