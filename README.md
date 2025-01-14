@@ -15,7 +15,7 @@ A future version could work with futures to return the results as soon as they a
 ## Installation
 
 ```bash
-    pip install git+https://github.com/ksallee/fpt-api.git
+pip install git+https://github.com/ksallee/fpt-api.git
 ```
 
 ## Usage
