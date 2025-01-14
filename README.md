@@ -1,6 +1,17 @@
 # fpt-api
 A wrapper around shotgun_api3 to allow retrieval of query fields.
 
+## Why this wrapper?
+
+Unfortunately, the shotgun_api3 does not allow retrieval of query fields.
+It's also not thread safe.
+
+Even though you could have your custom logic to compute the query fields (which could be faster than this library),
+this library is a simple way to get the query fields. It parallelizes the retrieval of query fields by using threads.
+
+Note that we still wait for the query fields to be retrieved before returning the results.
+A future version could work with futures to return the results as soon as they are available.
+
 ## Installation
 
 ```bash
