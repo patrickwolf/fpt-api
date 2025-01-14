@@ -1,5 +1,5 @@
 # fpt-api
-A wrapper around shotgun_api3 to allow retrieval of query fields.
+A wrapper around Flow Production Tracking (formerly ShotGrid) `shotgun_api3` library to allow retrieval of query fields.
 
 ## Why this wrapper?
 
