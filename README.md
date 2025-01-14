@@ -14,10 +14,12 @@ A thread-safe wrapper around Flow Production Tracking (formerly ShotGrid) that e
 From PyPI:
 
     pip install fpt-api
+    pip install git+https://github.com/shotgunsoftware/python-api.git
 
 From source:
 
     pip install git+https://github.com/ksallee/fpt-api.git
+    pip install git+https://github.com/shotgunsoftware/python-api.git
 
 ## Why This Wrapper?
 

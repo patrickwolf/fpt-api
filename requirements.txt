@@ -1,0 +1,3 @@
+git+https://github.com/shotgunsoftware/python-api.git
+urllib3
+certifi
