@@ -4,8 +4,8 @@ A thread-safe wrapper around Flow Production Tracking (formerly ShotGrid) that e
 
 ## Features
 
-- 🔍 Retrieves query fields (not supported in base shotgun_api3)
-- 🧵 Thread-safe operations
+- 🔍 Retrieves query fields (not supported in base `shotgun_api3`)
+- 🧵 Thread-safe operations (not supported in base `shotgun_api3`)
 - ⚡ Parallel processing for improved performance
 - 🔌 Drop-in replacement for basic shotgun_api3 operations
 
