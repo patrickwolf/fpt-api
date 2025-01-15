@@ -55,6 +55,7 @@ class FPT(BaseShotgun):
         from_handle: Optional[Shotgun] = None,
         timeout_secs: Optional[float] = None,
         connect: bool = True,
+        max_workers: int = 8,
         **kwargs: Any
     ) -> None:
         """
@@ -63,8 +64,10 @@ class FPT(BaseShotgun):
         :param from_handle: Existing FPT instance to copy settings from
         :param timeout_secs: Connection timeout in seconds
         :param connect: Whether to establish connection immediately
+        :param max_workers: Maximum number of worker threads for parallel processing
         """
         self._schema_cache: Dict[str, Dict] = {}
+        self._max_workers = max_workers
 
         # Configure connection parameters
         kparams: Dict[str, Any] = {}
@@ -309,8 +312,7 @@ class FPT(BaseShotgun):
         }
 
         # Process entities one by one
-        max_workers = min(8, len(query_fields) + len(dotted_query_map))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             for entity in entities:
                 # Process query fields
                 futures, result_entity = self._process_entity_query_fields(
@@ -332,6 +334,215 @@ class FPT(BaseShotgun):
                     result_entity.pop(field, None)
 
                 yield result_entity
+
+    def yield_page_entities(
+            self,
+            page_id: int,
+            additional_filters: Optional[List] = None,
+            fields: Optional[List[str]] = None,
+    ) -> Iterator[Entity]:
+        """
+        Yield entities from a Page, applying the Page filters.
+
+        :param page_id: ID of the Page to process
+        :param additional_filters: Additional filters to apply
+        :param fields: Fields to retrieve
+        :yields: Entities found
+        """
+        # Get page settings
+        page = self.find_one("Page", [["id", "is", page_id]], ["id"])
+        if not page:
+            raise ValueError(f"Page {page_id} not found")
+
+        page_settings = self.find(
+            "PageSetting",
+            [["page", "is", page]],
+            ["settings_json"]
+        )
+
+        # Process settings to get entity type and columns
+        entity_type = None
+        columns = None
+        filters = []
+
+        if page_settings:
+            # Get the first settings
+            first_json = page_settings[0]["settings_json"]
+            if isinstance(first_json, dict):
+                body_settings = first_json.get("children", {}).get("body", {}).get("settings", {})
+
+                # Get entity type and columns
+                entity_type = body_settings.get("entity_type")
+                list_content = (first_json.get("children", {})
+                                .get("body", {})
+                                .get("children", {})
+                                .get("list_content", {})
+                                .get("settings", {}))
+                columns = list_content.get("columns", [])
+
+                # Get main filters from body settings
+                if "filters" in body_settings:
+                    filters.extend(self._process_page_filters(body_settings["filters"]))
+
+            # Get panel filters from last settings
+            if len(page_settings) > 1:
+                last_json = page_settings[-1]["settings_json"]
+            else:
+                last_json = first_json
+
+            # Handle both dictionary and list formats for settings_json
+            if isinstance(last_json, dict):
+                panel_settings = (last_json.get("children", {})
+                                  .get("body", {})
+                                  .get("settings", {})
+                                  .get("filter_panel_main_entity_type_settings", {}))
+
+                if "panel_filters" in panel_settings:
+                    filters.extend(self._process_page_filters(panel_settings["panel_filters"]))
+
+            elif isinstance(last_json, list):
+                # Handle list format where each item may have panel filters
+                for item in last_json:
+                    if isinstance(item, dict):
+                        panel_filters = (item.get("settings", {})
+                                         .get("filter_panel_main_entity_type_settings", {})
+                                         .get("panel_filters"))
+                        if panel_filters:
+                            filters.extend(self._process_page_filters(panel_filters))
+
+        if not entity_type:
+            raise ValueError("Could not determine entity type from page settings")
+
+        # Wrap all filters in an 'all' operator if there are multiple
+        if len(filters) > 1:
+            final_filters = [{
+                "filter_operator": "all",
+                "filters": filters
+            }]
+        else:
+            final_filters = filters
+
+        # Add any additional filters
+        if additional_filters:
+            if final_filters and isinstance(final_filters[0], dict):
+                final_filters[0]["filters"].extend(additional_filters)
+            else:
+                final_filters.extend(additional_filters)
+
+        # Use specified fields or page columns
+        query_fields = fields if fields is not None else columns
+
+        # Debug output
+        logger.debug(f"Entity Type: {entity_type}")
+        logger.debug(f"Fields: {query_fields}")
+        from pprint import pformat
+        logger.debug(f"Filters: {pformat(final_filters)}")
+
+        # Find and yield entities
+        yield from self.yield_find(
+            entity_type,
+            filters=final_filters,
+            fields=query_fields
+        )
+
+    def _process_page_filters(self, filters: Dict) -> List[Union[Dict, List]]:
+        """
+        Process page filters into a format compatible with the FPT API.
+
+        :param filters: Raw page filters
+        :returns: List of processed filter conditions
+        """
+        if not filters or "conditions" not in filters:
+            return []
+
+        processed = []
+        project_filters = []
+
+        def process_condition(condition: Dict) -> Optional[Union[Dict, List]]:
+            # Skip inactive conditions
+            # Convert string "false" to boolean False
+            if str(condition.get("active", "true")).lower() == "false":
+                return None
+
+            # Skip if selected is False
+            if isinstance(condition.get("selected"), bool) and not condition["selected"]:
+                return None
+
+            # Handle nested conditions
+            if "conditions" in condition:
+                nested_filters = []
+                for nested_condition in condition["conditions"]:
+                    # Check for project filter first
+                    if nested_condition.get("top_level_project_filter"):
+                        project_result = process_condition(nested_condition)
+                        if project_result:
+                            if isinstance(project_result, list):
+                                project_filters.append(project_result)
+                            else:
+                                project_filters.extend(project_result.get("filters", []))
+                        continue
+
+                    nested_result = process_condition(nested_condition)
+                    if nested_result:
+                        nested_filters.append(nested_result)
+
+                if nested_filters:
+                    operator = "any" if condition.get("logical_operator") == "or" else "all"
+                    return {
+                        "filter_operator": operator,
+                        "filters": nested_filters
+                    }
+                return None
+
+            # Process individual condition
+            if all(key in condition for key in ["path", "relation", "values"]):
+                # Skip empty values
+                if not condition["values"] or condition["values"][0] == "":
+                    return None
+
+                value = condition["values"][0]
+
+                # Handle entity references
+                if isinstance(value, dict):
+                    if value.get("valid") == "parent_entity_token":
+                        return None
+                    if "type" in value and "id" in value:
+                        value = {
+                            "type": value["type"],
+                            "id": value["id"]
+                        }
+
+                # Skip step conditions as they're handled separately
+                if condition["path"] == "step":
+                    return None
+
+                return [condition["path"], condition["relation"], value]
+
+            return None
+
+        # Process all conditions
+        for condition in filters["conditions"]:
+            result = process_condition(condition)
+            if result:
+                processed.append(result)
+
+        # Combine project filters with other filters
+        final_filters = []
+
+        # Add project filters first
+        if project_filters:
+            if len(project_filters) > 1:
+                final_filters.append({
+                    "filter_operator": "all",
+                    "filters": project_filters
+                })
+            else:
+                final_filters.extend(project_filters)
+
+        # Add other filters
+        final_filters.extend(processed)
+
+        return final_filters
 
     def _process_query_fields(
         self, entities: List[Entity], args: Tuple, kwargs: Dict
@@ -368,8 +579,7 @@ class FPT(BaseShotgun):
             return entities
 
         # Process all entities and fields in parallel
-        max_workers = min(8, len(entities) * len(query_fields))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = []
             for entity in entities:
                 for field_name, field_schema in query_fields.items():
