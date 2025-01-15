@@ -92,10 +92,20 @@ FPT does not change the base API, but rather extends it with additional function
 
 Yield all Entities of a given Page, applying the Page filters:
 
-    fpt.yield_page_entities(page_id, additional_filters, fields)
-    page_id: int
-    additional_filters: list of optional additional SG filters
-    fields: list of SG fields, if not provided it will use the fields displayed in the Page
+    def yield_page_entities(
+        self,
+        page_id: int,
+        additional_filters: Optional[List] = None,
+        fields: Optional[List[str]] = None,
+    ) -> Iterator[Entity]:
+        """
+        Yield entities from a Page, applying the Page filters.
+
+        :param page_id: ID of the Page to process
+        :param additional_filters: Additional filters to apply
+        :param fields: Fields to retrieve
+        :yields: Entities found
+        """
 
 ## Performance Notes
 

@@ -336,10 +336,10 @@ class FPT(BaseShotgun):
                 yield result_entity
 
     def yield_page_entities(
-            self,
-            page_id: int,
-            additional_filters: Optional[List] = None,
-            fields: Optional[List[str]] = None,
+        self,
+        page_id: int,
+        additional_filters: Optional[List] = None,
+        fields: Optional[List[str]] = None,
     ) -> Iterator[Entity]:
         """
         Yield entities from a Page, applying the Page filters.
@@ -600,11 +600,11 @@ class FPT(BaseShotgun):
         return [result_map[entity["id"]] for entity in entities]
 
     def _process_entity_query_fields(
-            self,
-            entity: Entity,
-            query_fields: Dict[str, Dict],
-            dotted_query_map: Dict[str, Tuple[str, str, str]],
-            executor: ThreadPoolExecutor
+        self,
+        entity: Entity,
+        query_fields: Dict[str, Dict],
+        dotted_query_map: Dict[str, Tuple[str, str, str]],
+        executor: ThreadPoolExecutor
     ) -> Tuple[List[Tuple[Future, str]], Entity]:
         """
         Process query fields for a single entity.
@@ -708,9 +708,9 @@ class FPT(BaseShotgun):
         return ""
 
     def _prepare_query_fields(
-            self,
-            args: Tuple,
-            kwargs: Dict[str, Any]
+        self,
+        args: Tuple,
+        kwargs: Dict[str, Any]
     ) -> Tuple[str, List[str], Tuple, Dict[str, Any], Set[str], Dict[str, Tuple[str, str, str]]]:
         """
         Prepare query fields and handle dotted fields.
@@ -787,8 +787,9 @@ class FPT(BaseShotgun):
 
         return processed
 
-    def _get_dotted_query_fields(self, entity_type: str, fields: List[str]) -> Tuple[
-        Set[str], Dict[str, Tuple[str, str, str]]]:
+    def _get_dotted_query_fields(
+            self, entity_type: str, fields: List[str]
+    ) -> Tuple[Set[str], Dict[str, Tuple[str, str, str]]]:
         """
         Identify and parse dotted query fields.
 
@@ -824,9 +825,9 @@ class FPT(BaseShotgun):
         return additional_fields, dotted_query_map
 
     def _process_dotted_query_fields(
-            self,
-            entities: List[Entity],
-            dotted_query_map: Dict[str, Tuple[str, str, str]]
+        self,
+        entities: List[Entity],
+        dotted_query_map: Dict[str, Tuple[str, str, str]]
     ) -> None:
         """
         Process dotted query fields for the given entities.
@@ -967,7 +968,7 @@ class FPT(BaseShotgun):
         return ", ".join(formatted_results)
 
     def _handle_aggregate_query(
-            self, entity_type: str, filters: List, field: str, aggregate_type: str
+        self, entity_type: str, filters: List, field: str, aggregate_type: str
     ) -> str:
         """
         Handle an aggregate query field.
@@ -986,7 +987,7 @@ class FPT(BaseShotgun):
         return str(summary["summaries"][field])
 
     def _handle_percentage_query(
-            self, entity_type: str, filters: List, summary_type: str, field: str, summary_value: Union[Dict, str]
+        self, entity_type: str, filters: List, summary_type: str, field: str, summary_value: Union[Dict, str]
     ) -> str:
         """
         Handle a percentage query field.
