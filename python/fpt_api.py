@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterator
+from typing import Any, Dict, List, Optional, Tuple, Union, Iterator, Set
 
 import certifi
 import urllib3
@@ -189,13 +189,65 @@ class FPT(BaseShotgun):
     def find(self, *args: Any, **kwargs: Any) -> List[Entity]:
         """Find entities with parallel query field processing.
 
-        :returns: List of matching entities with resolved fields
+        Returns:
+            List of matching entities with resolved fields
         """
         process_query = kwargs.pop("process_query_fields", True)
+        if not process_query:
+            return super().find(*args, **kwargs)
+
+        # Extract query parameters
+        if args:
+            entity_type = args[0]
+            fields = args[2] if len(args) > 2 else kwargs.get("fields", [])
+        else:
+            entity_type = kwargs.get("entity_type")
+            fields = kwargs.get("fields", [])
+
+        if not fields:
+            return super().find(*args, **kwargs)
+
+        # Handle dotted query fields
+        additional_fields, dotted_query_map = self._get_dotted_query_fields(entity_type, fields)
+
+        # Add any additional fields needed for dotted queries
+        if additional_fields:
+            if args:
+                new_args = list(args)
+                if len(new_args) > 2:
+                    new_fields = set(new_args[2])
+                    new_fields.update(additional_fields)
+                    # Remove the original dotted fields to avoid nesting
+                    new_fields = {f for f in new_fields if '.' not in f or f in additional_fields}
+                    new_args[2] = list(new_fields)
+                args = tuple(new_args)
+            else:
+                fields = set(kwargs.get("fields", []))
+                fields.update(additional_fields)
+                # Remove the original dotted fields to avoid nesting
+                fields = {f for f in fields if '.' not in f or f in additional_fields}
+                kwargs["fields"] = list(fields)
+
+        # Get entities with standard and additional fields
         entities = super().find(*args, **kwargs)
-        if not entities or not process_query:
+        if not entities:
             return entities
-        return self._process_query_fields(entities, args, kwargs)
+
+        # Process regular query fields
+        entities = self._process_query_fields(entities, args, kwargs)
+
+        # Process dotted query fields
+        if dotted_query_map:
+            self._process_dotted_query_fields(entities, dotted_query_map)
+
+            # Remove helper fields that weren't originally requested
+            original_fields = set(fields)
+            helper_fields = additional_fields - original_fields
+            for entity in entities:
+                for field in helper_fields:
+                    entity.pop(field, None)
+
+        return entities
 
     def find_one(self, *args: Any, **kwargs: Any) -> Optional[Entity]:
         """Find a single entity with parallel query field processing.
@@ -221,13 +273,7 @@ class FPT(BaseShotgun):
         """
         process_query = kwargs.pop("process_query_fields", True)
 
-        # Get all entities first since the base API doesn't support streaming
-        entities = super().find(*args, **kwargs)
-        if not entities or not process_query:
-            yield from entities
-            return
-
-        # Extract query parameters
+        # Extract query parameters for field processing
         if args:
             entity_type = args[0]
             fields = args[2] if len(args) > 2 else kwargs.get("fields", [])
@@ -235,39 +281,92 @@ class FPT(BaseShotgun):
             entity_type = kwargs.get("entity_type")
             fields = kwargs.get("fields", [])
 
-        # Use cached schema
+        if not fields or not process_query:
+            yield from super().find(*args, **kwargs)
+            return
+
+        # Handle dotted query fields
+        additional_fields, dotted_query_map = self._get_dotted_query_fields(entity_type, fields)
+
+        # Add any additional fields needed for dotted queries
+        if additional_fields:
+            if args:
+                new_args = list(args)
+                if len(new_args) > 2:
+                    new_fields = set(new_args[2])
+                    new_fields.update(additional_fields)
+                    # Remove the original dotted fields to avoid nesting
+                    new_fields = {f for f in new_fields if '.' not in f or f in additional_fields}
+                    new_args[2] = list(new_fields)
+                args = tuple(new_args)
+            else:
+                fields = set(kwargs.get("fields", []))
+                fields.update(additional_fields)
+                # Remove the original dotted fields to avoid nesting
+                fields = {f for f in fields if '.' not in f or f in additional_fields}
+                kwargs["fields"] = list(fields)
+
+        # Get all entities first since the base API doesn't support streaming
+        entities = super().find(*args, **kwargs)
+        if not entities:
+            return
+
+        # Use cached schema for regular query fields
         if entity_type not in self._schema_cache:
             self._schema_cache[entity_type] = self.schema_field_read(entity_type)
         schema = self._schema_cache[entity_type]
 
-        # Get query fields
-        requested_fields = set(fields)
+        # Get regular query fields
         query_fields = {
             field: schema[field]
-            for field in requested_fields
-            if field in schema and "query" in schema[field].get("properties", {})
+            for field in fields
+            if '.' not in field and field in schema and "query" in schema[field].get("properties", {})
         }
 
-        if not query_fields:
-            yield from entities
-            return
-
-        # Process entities and fields in parallel, yielding as they complete
-        max_workers = min(8, len(entities) * len(query_fields))
+        # Process entities one by one
+        max_workers = min(8, len(query_fields) + len(dotted_query_map))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Process each entity
             for entity in entities:
-                entity_id = entity["id"]
                 result_entity = entity.copy()
                 futures = []
 
-                # Submit futures for each query field
+                # Submit futures for regular query fields
                 for field_name, field_schema in query_fields.items():
                     future = executor.submit(
                         self._resolve_query_field,
                         field_name=field_name,
                         field_schema=field_schema,
-                        parent_entity={"type": entity["type"], "id": entity_id}
+                        parent_entity={"type": entity["type"], "id": entity["id"]}
+                    )
+                    futures.append((future, field_name))
+
+                # Submit futures for dotted query fields
+                for field_name, (linked_type, link_path, query_field) in dotted_query_map.items():
+                    # Get the linked entity from the path
+                    linked_entity = result_entity
+                    for path_part in link_path.split('.'):
+                        linked_entity = linked_entity.get(path_part, {})
+                        if not linked_entity:
+                            break
+
+                    if not linked_entity or not isinstance(linked_entity, dict):
+                        continue
+
+                    # Get schema for the linked entity type
+                    if linked_type not in self._schema_cache:
+                        self._schema_cache[linked_type] = self.schema_field_read(linked_type)
+                    linked_schema = self._schema_cache[linked_type]
+
+                    # Get query field schema
+                    field_schema = linked_schema.get(query_field, {})
+                    if not field_schema or "query" not in field_schema.get("properties", {}):
+                        continue
+
+                    future = executor.submit(
+                        self._resolve_query_field,
+                        field_name=query_field,
+                        field_schema=field_schema,
+                        parent_entity={"type": linked_type, "id": linked_entity.get("id")}
                     )
                     futures.append((future, field_name))
 
@@ -279,6 +378,11 @@ class FPT(BaseShotgun):
                     except Exception as e:
                         logger.error(f"Error processing query field {field_name}: {e}")
                         result_entity[field_name] = None
+
+                # Remove helper fields that weren't originally requested
+                helper_fields = additional_fields - set(fields)
+                for field in helper_fields:
+                    result_entity.pop(field, None)
 
                 yield result_entity
 
@@ -416,6 +520,102 @@ class FPT(BaseShotgun):
                     processed.append(filter_array)
 
         return processed
+
+    def _get_dotted_query_fields(self, entity_type: str, fields: List[str]) -> Tuple[
+        Set[str], Dict[str, Tuple[str, str, str]]]:
+        """Identify and parse dotted query fields.
+
+        Args:
+            entity_type: The base entity type being queried
+            fields: List of requested fields
+
+        Returns:
+            Tuple of:
+            - Set of additional fields needed for the initial query
+            - Dict mapping original dotted fields to (entity_type, link_field, query_field)
+        """
+        additional_fields = set()
+        dotted_query_map = {}
+
+        for field in fields:
+            parts = field.split('.')
+            if len(parts) >= 3:  # We have a dotted field with 3+ parts
+                # Last part is the query field name
+                query_field = parts[-1]
+                # Second to last is the linked entity type
+                linked_entity_type = parts[-2]
+                # Everything before that is the path to the linked entity
+                link_path = '.'.join(parts[:-2])
+
+                # Get schema for the linked entity type
+                if linked_entity_type not in self._schema_cache:
+                    self._schema_cache[linked_entity_type] = self.schema_field_read(linked_entity_type)
+                linked_schema = self._schema_cache[linked_entity_type]
+
+                # Check if this is actually a query field
+                if query_field in linked_schema and "query" in linked_schema[query_field].get("properties", {}):
+                    # We need to request the link path in the initial query
+                    additional_fields.add(link_path)
+                    dotted_query_map[field] = (linked_entity_type, link_path, query_field)
+
+        return additional_fields, dotted_query_map
+
+    def _process_dotted_query_fields(
+            self,
+            entities: List[Entity],
+            dotted_query_map: Dict[str, Tuple[str, str, str]]
+    ) -> None:
+        """Process dotted query fields for the given entities.
+
+        Args:
+            entities: List of entities to process
+            dotted_query_map: Mapping of dotted fields to their components
+        """
+        if not entities or not dotted_query_map:
+            return
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+
+            for entity in entities:
+                for original_field, (linked_type, link_path, query_field) in dotted_query_map.items():
+                    # Get the linked entity from the path
+                    linked_entity = entity
+                    for path_part in link_path.split('.'):
+                        linked_entity = linked_entity.get(path_part, {})
+                        if not linked_entity:
+                            break
+
+                    if not linked_entity or not isinstance(linked_entity, dict):
+                        continue
+
+                    # Get schema for the linked entity type
+                    if linked_type not in self._schema_cache:
+                        self._schema_cache[linked_type] = self.schema_field_read(linked_type)
+                    schema = self._schema_cache[linked_type]
+
+                    # Get query field schema
+                    field_schema = schema.get(query_field, {})
+                    if not field_schema or "query" not in field_schema.get("properties", {}):
+                        continue
+
+                    # Submit the query field resolution
+                    future = executor.submit(
+                        self._resolve_query_field,
+                        field_name=query_field,
+                        field_schema=field_schema,
+                        parent_entity={"type": linked_type, "id": linked_entity.get("id")}
+                    )
+                    futures.append((future, entity, original_field))
+
+            # Process results
+            for future, entity, field_name in futures:
+                try:
+                    result = future.result(timeout=30)
+                    # Store the result using the original dotted field name
+                    entity[field_name] = result
+                except Exception as e:
+                    logger.error(f"Error processing dotted query field {field_name}: {e}")
 
     def _create_filter_array(
         self, condition: Dict, parent_entity: Dict
