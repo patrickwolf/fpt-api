@@ -730,7 +730,6 @@ class FPT(BaseShotgun):
 
         # Handle dotted query fields
         additional_fields, dotted_query_map = self._get_dotted_query_fields(entity_type, fields)
-
         # Prepare modified args/kwargs
         modified_args = args
         modified_kwargs = kwargs.copy()
@@ -745,14 +744,20 @@ class FPT(BaseShotgun):
                     # Remove the original dotted fields to avoid nesting
                     new_fields = {f for f in new_fields if '.' not in f or f in additional_fields}
                     new_args[2] = list(new_fields)
+                else:
+                    query_fields = set(kwargs.get("fields", []))
+                    query_fields.update(additional_fields)
+                    # Remove the original dotted fields to avoid nesting
+                    query_fields = {f for f in query_fields if '.' not in f or f in additional_fields}
+                    modified_kwargs["fields"] = list(query_fields)
                 modified_args = tuple(new_args)
+
             else:
                 query_fields = set(kwargs.get("fields", []))
                 query_fields.update(additional_fields)
                 # Remove the original dotted fields to avoid nesting
                 query_fields = {f for f in query_fields if '.' not in f or f in additional_fields}
                 modified_kwargs["fields"] = list(query_fields)
-
         return entity_type, fields, modified_args, modified_kwargs, additional_fields, dotted_query_map
 
     def _process_filters(
