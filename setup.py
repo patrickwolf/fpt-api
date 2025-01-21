@@ -7,9 +7,9 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="fpt-api",
-    version="0.3.2",
-    packages=find_packages(where="python"),
-    package_dir={"": "python"},
+    version="0.3.3",
+    packages=["fpt_api"],
+    package_dir={"fpt_api": "python"},
     install_requires=[
         "shotgun_api3",
         "urllib3",
