@@ -7,7 +7,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="fpt-api",
-    version="0.3.3",
+    version="0.3.4",
     packages=["fpt_api"],
     package_dir={"fpt_api": "python"},
     install_requires=[
