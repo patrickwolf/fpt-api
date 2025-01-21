@@ -14,6 +14,7 @@ setup(
         "shotgun_api3",
         "urllib3",
         "certifi",
+        "requests"
     ],
     python_requires=">=3.7",
     long_description=long_description,
