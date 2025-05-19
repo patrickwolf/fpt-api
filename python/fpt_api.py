@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Iterator, Set
 
 import certifi
 import urllib3
+import shotgun_api3
 from requests.packages.urllib3.util.retry import Retry
 from shotgun_api3 import Shotgun
 
@@ -43,6 +44,9 @@ if BaseSG == "mockgun":
 else:
     BaseShotgun = Shotgun
 
+# ----------------------------------------------------------------------------
+# Version from Shotgun Library
+__version__ = shotgun_api3.__version__ 
 
 class FPT(BaseShotgun):
     """
@@ -205,8 +209,18 @@ class FPT(BaseShotgun):
         """
         Find entities with parallel query field processing.
 
+        :param dict logged_in_user: Optional dictionary that represents the user you want to act as. 
+         This is used for query fields definitions that reference "Me"
+         Example: {'type': 'HumanUser', id: 1}        
+
         :returns: List of Entities found.
         """
+        logged_in_user = kwargs.pop("logged_in_user", None)
+        # HACK: Storing the logged in user on an instance level 
+        # it should really be passed to down to _create_filter_array
+        if logged_in_user:
+            self._logged_in_user = logged_in_user
+
         process_query = kwargs.pop("process_query_fields", True)
         if not process_query:
             return super().find(*args, **kwargs)
@@ -245,6 +259,12 @@ class FPT(BaseShotgun):
 
         :returns: The Entity found or None if not found.
         """
+        logged_in_user = kwargs.pop("logged_in_user", True)
+        # HACK: Storing the logged in user on an instance level 
+        # it should really be passed to down to _create_filter_array
+        if logged_in_user:
+            self._logged_in_user = logged_in_user
+
         process_query = kwargs.pop("process_query_fields", True)
 
         if process_query:
@@ -284,6 +304,12 @@ class FPT(BaseShotgun):
 
         :yields: Entities found.
         """
+        logged_in_user = kwargs.pop("logged_in_user", True)
+        # HACK: Storing the logged in user on an instance level 
+        # it should really be passed to down to _create_filter_array
+        if logged_in_user:
+            self._logged_in_user = logged_in_user
+
         process_query = kwargs.pop("process_query_fields", True)
 
         # Prepare fields and handle dotted fields
@@ -570,11 +596,13 @@ class FPT(BaseShotgun):
 
         # Get query fields
         requested_fields = set(fields)
-        query_fields = {
-            field: schema[field]
-            for field in requested_fields
-            if field in schema and "query" in schema[field].get("properties", {})
-        }
+        query_fields = {}
+        for field in requested_fields:
+            # We are also ensuring that at least in entity 0 the value is empty 
+            # to ensure that SG hasn't already returned the value (ie with Shot.OpenNotes Count)
+            if field in schema and "query" in schema[field].get("properties", {}) and not entities[0][field]:
+                query_fields[field] = schema[field]
+
         if not query_fields:
             return entities
 
@@ -903,11 +931,14 @@ class FPT(BaseShotgun):
         if not values:
             return None
 
+
         value = values[0]
 
         if isinstance(value, dict):
             if value.get("valid") == "parent_entity_token":
                 return [path, relation, parent_entity]
+            elif value.get("valid") == "logged_in_user_token" and self._logged_in_user:
+                return [path, relation, self._logged_in_user]
             elif value.get("id") == 0:
                 return None
             else:
